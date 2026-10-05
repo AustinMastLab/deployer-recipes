@@ -3,14 +3,14 @@
     "description": "Shared Deployer recipes and AWS SSM environment tools for AustinMastLab sites",
     "type": "library",
     "require": {
-        "php": ">=8.1"
-    },
-    "suggest": {
-        "deployer/deployer": "The recipes are written for Deployer 7 and 8."
+        "php": ">=8.3"
     },
     "bin": [
         "bin/generate-env",
         "bin/push-env-params",
         "bin/remove-env-params"
-    ]
+    ],
+    "conflict": {
+        "deployer/deployer": "<8.0"
+    }
 }

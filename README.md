@@ -13,6 +13,8 @@ Shared [Deployer](https://deployer.org) recipes and AWS SSM Parameter Store tool
 
 ## Installing in a site
 
+Requires Deployer 8. The `env:ssm` task sends `generate-env` to the server in a shell heredoc, which Deployer 7's command wrapper breaks; Composer refuses to install this package next to Deployer 7.
+
 The package isn't on Packagist, so add the repository and require it as a development dependency. Deployer runs from the CI runner or your machine, never from the server's production `vendor/`.
 
 ```json
