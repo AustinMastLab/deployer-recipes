@@ -2,6 +2,16 @@
 
 Shared [Deployer](https://deployer.org) recipes and AWS SSM Parameter Store tools for AustinMastLab sites. Each site loads this package with Composer, so every site uses the same versioned deploy logic instead of its own copy.
 
+## Sites using it
+
+| Site | Repository | `ssm_app` | Deploys to |
+| --- | --- | --- | --- |
+| BIOSPEX | [Biospex](https://github.com/AustinMastLab/Biospex) | `biospex` | production, development |
+| Digitization Academy | [DigitizationAcademy](https://github.com/AustinMastLab/DigitizationAcademy) | `digitizationacademy` | production, development |
+| WeDigBio reports | [wedigbio-reports](https://github.com/AustinMastLab/wedigbio-reports) | `wedigbio-reports` | production only |
+
+All three run Deployer 8 and PHP 8.5, and deploy to the same two servers (production `3.142.169.134`, development `3.138.217.206`).
+
 ## Contents
 
 | Path | Purpose |
@@ -72,6 +82,12 @@ The task streams `bin/generate-env` to the server over SSH and runs it there. No
 - **Strips carriage returns and line feeds from values,** which otherwise break Laravel URLs.
 - **Backs up the old `.env` only when the content changes,** and keeps the newest `ssm_env_backups` backups.
 
+**Server permissions.** The server's instance role needs `ssm:GetParametersByPath` on `/<app>/<environment>*` and `kms:Decrypt` through SSM. `ProdEC2DeployPolicy` and `DevEC2DeployPolicy` grant this for all three sites.
+
+**First deploy after switching to this task,** or after a change to the output format: the file is rewritten once with the same values (for example, the header line changes or hand-edited lines are normalized), one backup is made, and older backups are trimmed. Later deploys print `No changes: … already matches SSM (N parameters).`
+
+**Rolling back** with `dep rollback` doesn't run `env:ssm`; it only switches `current`. If you need the previous values, copy the matching `shared/.env.backup.*` over `shared/.env`.
+
 To regenerate a `.env` by hand on a server:
 
 ```bash
@@ -92,8 +108,22 @@ Keep `.env.aws.*` files out of git. Each site's `.gitignore` should cover `/.env
 
 ## Releasing
 
-Tag a new version after changing anything. Sites pick it up with `composer update austinmastlab/deployer-recipes`.
+Tag a new version after changing anything, then update each site:
 
 ```bash
-git tag v1.0.1 && git push origin v1.0.1
+git tag v1.0.2 && git push origin v1.0.2
+
+# in each site
+composer update austinmastlab/deployer-recipes
 ```
+
+Roll a change out on BIOSPEX or Digitization Academy development first, since WeDigBio reports has no development deployment. Check the deploy log for `Generated …` or `No changes …` from `env:ssm`.
+
+| Version | Change |
+| --- | --- |
+| v1.0.1 | Requires Deployer 8 (conflicts with `<8.0`). The `env:ssm` heredoc fails under Deployer 7. |
+| v1.0.0 | First release: `env:ssm`, `generate-env`, `push-env-params`, `remove-env-params`. |
+
+## Upgrading a site's packages
+
+When you run `composer update` in a site, also check packages that extend framework commands. A Laravel update added a `--stop-when-empty-for` option to `queue:work`, and Horizon versions before 5.48 crash on it because `horizon:work` extends `queue:work`. Digitization Academy had pinned `laravel/horizon` to `5.35.*`, so its workers failed until Horizon was upgraded. Look at `composer outdated --direct` for packages held back by tight constraints, and after deploying check that queue workers stay up, not just that Supervisor shows RUNNING.
