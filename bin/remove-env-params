@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+#
+# Delete every AWS SSM parameter under /<app>/<environment>. This cannot be undone.
+#
+# Usage: remove-env-params <app> <environment>
+#
+# Lists the parameters and asks you to type the environment name before deleting
+# them in batches of 10. The region comes from AWS_REGION, defaulting to us-east-2.
+
+set -euo pipefail
+
+APP_NAME="${1:?Usage: remove-env-params <app> <environment>}"
+APP_ENVIRONMENT="${2:?Usage: remove-env-params <app> <environment>}"
+REGION="${AWS_REGION:-us-east-2}"
+SSM_PATH="/${APP_NAME}/${APP_ENVIRONMENT}"
+
+mapfile -t names < <(aws ssm get-parameters-by-path \
+  --region "${REGION}" \
+  --path "${SSM_PATH}" \
+  --recursive \
+  --query "Parameters[].Name" \
+  --output json | jq -r '.[]')
+
+if [ "${#names[@]}" -eq 0 ]; then
+  echo "No parameters found under ${SSM_PATH}. Nothing to delete."
+  exit 0
+fi
+
+printf '  %s\n' "${names[@]}"
+echo "About to delete ${#names[@]} parameters under ${SSM_PATH}. THIS CANNOT BE UNDONE."
+read -r -p "Type the environment name (${APP_ENVIRONMENT}) to continue: " answer
+if [ "${answer}" != "${APP_ENVIRONMENT}" ]; then
+  echo "Aborted."
+  exit 1
+fi
+
+deleted=0
+for ((i = 0; i < ${#names[@]}; i += 10)); do
+  batch=("${names[@]:i:10}")
+  aws ssm delete-parameters --region "${REGION}" --names "${batch[@]}" > /dev/null
+  deleted=$((deleted + ${#batch[@]}))
+  echo "Deleted ${deleted} of ${#names[@]}."
+done
+
+echo "All parameters under ${SSM_PATH} deleted."

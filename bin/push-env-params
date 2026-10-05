@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+#
+# Push a local env file to the AWS SSM Parameter Store as SecureString parameters.
+#
+# Usage: push-env-params <app> <environment> [env-file]
+#   push-env-params biospex development            # reads .env.aws.development
+#   push-env-params biospex production ./prod.env
+#
+# Each KEY=value line becomes /<app>/<environment>/KEY. Comments, blank lines and
+# empty values are skipped (SSM does not allow empty values). Existing parameters
+# are overwritten. The region comes from AWS_REGION, defaulting to us-east-2.
+
+set -euo pipefail
+
+APP_NAME="${1:?Usage: push-env-params <app> <environment> [env-file]}"
+APP_ENVIRONMENT="${2:?Usage: push-env-params <app> <environment> [env-file]}"
+ENV_FILE="${3:-.env.aws.${APP_ENVIRONMENT}}"
+REGION="${AWS_REGION:-us-east-2}"
+SSM_PREFIX="/${APP_NAME}/${APP_ENVIRONMENT}"
+
+if [ ! -f "${ENV_FILE}" ]; then
+  echo "Error: file ${ENV_FILE} not found." >&2
+  exit 1
+fi
+
+echo "Pushing parameters from ${ENV_FILE} to SSM path ${SSM_PREFIX}..."
+
+while IFS= read -r line || [ -n "${line}" ]; do
+  # Strip carriage returns (files edited on Windows).
+  line=$(printf '%s' "${line}" | tr -d '\r')
+
+  # Skip comments, blank lines and lines without "=".
+  [[ "${line}" =~ ^[[:space:]]*# ]] && continue
+  [[ -z "${line// /}" ]] && continue
+  [[ "${line}" != *"="* ]] && continue
+
+  key=$(printf '%s' "${line}" | cut -d '=' -f 1 | xargs)
+  value=$(printf '%s' "${line}" | cut -d '=' -f 2-)
+
+  # Trim surrounding whitespace, then one pair of surrounding quotes.
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  value=$(printf '%s' "${value}" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+
+  if [ -z "${value}" ]; then
+    echo "Skipping ${key}: SSM values cannot be empty."
+    continue
+  fi
+
+  echo "Pushing ${SSM_PREFIX}/${key}..."
+  aws ssm put-parameter \
+    --region "${REGION}" \
+    --name "${SSM_PREFIX}/${key}" \
+    --value "${value}" \
+    --type SecureString \
+    --overwrite > /dev/null
+done < "${ENV_FILE}"
+
+echo "All parameters pushed."

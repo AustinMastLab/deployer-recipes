@@ -1,0 +1,80 @@
+#!/usr/bin/env bash
+#
+# Generate a .env file from the AWS SSM Parameter Store.
+#
+# Usage: generate-env <app> <environment> [output-file] [backups-to-keep]
+#   generate-env biospex production
+#   generate-env biospex development /tmp/.env 5
+#
+# Reads every parameter under /<app>/<environment> (decrypted) and writes them as
+# KEY="value" lines. The file is written only after all parameters have been read,
+# its permissions and owner are preserved, and a timestamped backup is kept only when
+# the content changes. Older backups beyond [backups-to-keep] are deleted.
+#
+# Requires the AWS CLI (with credentials or an instance role that can read the path)
+# and jq. The region comes from AWS_REGION, defaulting to us-east-2.
+
+set -euo pipefail
+
+APP_NAME="${1:?Usage: generate-env <app> <environment> [output-file] [backups-to-keep]}"
+APP_ENVIRONMENT="${2:?Usage: generate-env <app> <environment> [output-file] [backups-to-keep]}"
+OUTPUT_FILE="${3:-/data/web/${APP_NAME}/shared/.env}"
+KEEP_BACKUPS="${4:-5}"
+REGION="${AWS_REGION:-us-east-2}"
+SSM_PATH="/${APP_NAME}/${APP_ENVIRONMENT}"
+
+echo "Generating ${OUTPUT_FILE} from SSM path ${SSM_PATH}..."
+
+json=$(aws ssm get-parameters-by-path \
+  --region "${REGION}" \
+  --path "${SSM_PATH}" \
+  --with-decryption \
+  --recursive \
+  --output json)
+
+count=$(printf '%s' "${json}" | jq '.Parameters | length')
+if [ "${count}" -eq 0 ]; then
+  echo "Error: no parameters found under ${SSM_PATH}. Leaving ${OUTPUT_FILE} unchanged." >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "${OUTPUT_FILE}")"
+
+umask 077
+tmp_file="$(mktemp "${OUTPUT_FILE}.XXXXXX")"
+trap 'rm -f "${tmp_file}"' EXIT
+
+{
+  echo "# Generated from SSM ${SSM_PATH}"
+  printf '%s' "${json}" | jq -r '.Parameters[] | "\(.Name)\u0001\(.Value)"' \
+    | while IFS=$'\x01' read -r name value; do
+        key="${name#"${SSM_PATH}"/}"
+
+        # Strip carriage returns and line feeds, which cause "Invalid URI" errors in Laravel.
+        clean_value=$(printf '%s' "${value}" | tr -d '\r\n')
+
+        # Escape backslashes and double quotes for the .env file.
+        escaped=$(printf '%s' "${clean_value}" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+
+        printf '%s="%s"\n' "${key}" "${escaped}"
+      done
+} > "${tmp_file}"
+
+if [ -f "${OUTPUT_FILE}" ]; then
+  if cmp -s "${tmp_file}" "${OUTPUT_FILE}"; then
+    echo "No changes: ${OUTPUT_FILE} already matches SSM (${count} parameters)."
+    exit 0
+  fi
+
+  cp -p "${OUTPUT_FILE}" "${OUTPUT_FILE}.backup.$(date +%Y%m%d_%H%M%S)"
+
+  # Rewrite in place so the existing permissions and owner are kept.
+  cat "${tmp_file}" > "${OUTPUT_FILE}"
+else
+  install -m 600 "${tmp_file}" "${OUTPUT_FILE}"
+fi
+
+# Keep only the newest backups.
+ls -1t "${OUTPUT_FILE}".backup.* 2>/dev/null | tail -n "+$((KEEP_BACKUPS + 1))" | xargs -r rm -f
+
+echo "Generated ${OUTPUT_FILE} (${count} parameters)."
