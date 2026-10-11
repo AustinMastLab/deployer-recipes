@@ -19,6 +19,7 @@ All three run Deployer 8 and PHP 8.5, and deploy to the same two servers (produc
 | `recipe/ssm-env.php` | Deployer task `env:ssm`: generates the site's shared `.env` from SSM on the server. |
 | `bin/generate-env` | Builds a `.env` from `/<app>/<environment>` in SSM. `env:ssm` runs it on the server. |
 | `bin/push-env-params` | Pushes a local env file to SSM as `SecureString` parameters. |
+| `bin/delete-env-param` | Deletes individual parameters under `/<app>/<environment>`, after confirmation. |
 | `bin/remove-env-params` | Deletes every parameter under `/<app>/<environment>`, after confirmation. |
 
 ## Installing in a site
@@ -101,8 +102,11 @@ Run these from your machine with AWS credentials that can write to SSM:
 ```bash
 vendor/bin/push-env-params biospex development        # reads .env.aws.development
 vendor/bin/push-env-params biospex production ./prod.env
+vendor/bin/delete-env-param biospex production OPCACHE_WEBHOOK_TOKEN   # asks you to type the environment name
 vendor/bin/remove-env-params biospex development      # asks you to type the environment name
 ```
+
+`push-env-params` only adds or overwrites parameters. When you remove a line from `.env.aws.<environment>`, also delete the parameter with `delete-env-param`. Otherwise `env:ssm` keeps writing it into the server's `.env`. `delete-env-param` takes one or more keys, reports keys that don't exist, and skips them.
 
 Keep `.env.aws.*` files out of git. Each site's `.gitignore` should cover `/.env.*`.
 
@@ -121,6 +125,7 @@ Roll a change out on BIOSPEX or Digitization Academy development first, since We
 
 | Version | Change |
 | --- | --- |
+| v1.1.0 | Adds `delete-env-param` to delete individual parameters. |
 | v1.0.1 | Requires Deployer 8 (conflicts with `<8.0`). The `env:ssm` heredoc fails under Deployer 7. |
 | v1.0.0 | First release: `env:ssm`, `generate-env`, `push-env-params`, `remove-env-params`. |
 

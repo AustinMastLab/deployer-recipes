@@ -6,6 +6,7 @@
         "php": ">=8.3"
     },
     "bin": [
+        "bin/delete-env-param",
         "bin/generate-env",
         "bin/push-env-params",
         "bin/remove-env-params"
