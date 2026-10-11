@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+#
+# Delete individual AWS SSM parameters under /<app>/<environment>. This cannot be undone.
+#
+# Usage: delete-env-param <app> <environment> <KEY> [KEY...]
+#   delete-env-param biospex production OPCACHE_WEBHOOK_TOKEN
+#
+# push-env-params never deletes, so use this after removing a line from
+# .env.aws.<environment>. Keys that don't exist are reported and skipped. Lists the
+# parameters and asks you to type the environment name before deleting them.
+# The region comes from AWS_REGION, defaulting to us-east-2.
+
+set -euo pipefail
+
+USAGE="Usage: delete-env-param <app> <environment> <KEY> [KEY...]"
+APP_NAME="${1:?${USAGE}}"
+APP_ENVIRONMENT="${2:?${USAGE}}"
+shift 2
+
+if [ "$#" -eq 0 ]; then
+  echo "${USAGE}" >&2
+  exit 1
+fi
+
+REGION="${AWS_REGION:-us-east-2}"
+SSM_PATH="/${APP_NAME}/${APP_ENVIRONMENT}"
+
+requested=()
+for key in "$@"; do
+  if [[ ! "${key}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+    echo "Error: ${key} is not a valid key. Pass the key only, for example APP_KEY." >&2
+    exit 1
+  fi
+  requested+=("${SSM_PATH}/${key}")
+done
+
+# get-parameters takes at most 10 names per call.
+names=()
+for ((i = 0; i < ${#requested[@]}; i += 10)); do
+  batch=("${requested[@]:i:10}")
+  result=$(aws ssm get-parameters --region "${REGION}" --names "${batch[@]}" --output json)
+  mapfile -t found < <(jq -r '.Parameters[].Name' <<< "${result}")
+  mapfile -t missing < <(jq -r '.InvalidParameters[]' <<< "${result}")
+  names+=("${found[@]}")
+  for name in "${missing[@]}"; do
+    echo "Not found, skipping: ${name}"
+  done
+done
+
+if [ "${#names[@]}" -eq 0 ]; then
+  echo "None of the parameters exist under ${SSM_PATH}. Nothing to delete."
+  exit 0
+fi
+
+printf '  %s\n' "${names[@]}"
+echo "About to delete ${#names[@]} parameters under ${SSM_PATH}. THIS CANNOT BE UNDONE."
+read -r -p "Type the environment name (${APP_ENVIRONMENT}) to continue: " answer
+if [ "${answer}" != "${APP_ENVIRONMENT}" ]; then
+  echo "Aborted."
+  exit 1
+fi
+
+for ((i = 0; i < ${#names[@]}; i += 10)); do
+  batch=("${names[@]:i:10}")
+  aws ssm delete-parameters --region "${REGION}" --names "${batch[@]}" > /dev/null
+done
+
+echo "Deleted ${#names[@]} parameters under ${SSM_PATH}."
